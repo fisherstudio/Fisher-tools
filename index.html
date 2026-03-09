@@ -146,6 +146,18 @@
       gap: 10px;
       flex-wrap: wrap;
       margin-top: 20px;
+      position: relative;
+    }
+
+    /* HONEYPOT - скрытое поле для ботов */
+    .honeypot {
+      position: absolute;
+      left: -9999px;
+      top: -9999px;
+      opacity: 0;
+      height: 0;
+      width: 0;
+      pointer-events: none;
     }
 
     .email-form input {
@@ -180,6 +192,11 @@
       background: #1d4ed8;
     }
 
+    .btn-primary:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
     .btn-outline {
       background: transparent;
       border: 1px solid #3b4e77;
@@ -198,6 +215,12 @@
     .success-message {
       color: #4ade80;
       margin-top: 12px;
+    }
+
+    .error-message {
+      color: #f87171;
+      margin-top: 12px;
+      font-size: 0.9rem;
     }
 
     /* POPUP */
@@ -468,10 +491,13 @@
       <h2 id="popupTitle">🎁 Wait! Get Free Tool</h2>
       <p id="popupDesc">Download our Lightweight Parser for free — collect 1000 members/day. No credit card.</p>
       <div class="email-form" style="justify-content: center;">
-        <input type="email" id="popupEmail" placeholder="Your email address">
+        <!-- Honeypot поле (невидимое) -->
+        <input type="text" class="honeypot" id="popupHoneypot" autocomplete="off" tabindex="-1">
+        <input type="email" id="popupEmail" placeholder="Your email address" required>
         <button class="btn-primary" onclick="handlePopupSubmit()" id="popupBtn">Get it now</button>
       </div>
       <div id="popupSuccess" class="success-message hidden"></div>
+      <div id="popupError" class="error-message hidden"></div>
     </div>
   </div>
 
@@ -484,15 +510,18 @@
         <h2 id="leadTitle">🎁 Free Lightweight Parser</h2>
         <p id="leadDesc">Get our basic Telegram parser for free — collect up to 1000 members per day. No credit card required.</p>
         <div class="email-form" id="emailForm">
+          <!-- Honeypot поле (невидимое) -->
+          <input type="text" class="honeypot" id="mainHoneypot" autocomplete="off" tabindex="-1">
           <input type="email" id="emailInput" placeholder="Your email address" required>
           <button class="btn-primary" onclick="handleEmailSubmit()" id="submitBtn">Send me the tool</button>
         </div>
         <div id="successMessage" class="success-message hidden"></div>
+        <div id="errorMessage" class="error-message hidden"></div>
       </div>
       <div style="font-size: 5rem; opacity: 0.2; user-select: none;">🎁</div>
     </div>
 
-    <!-- ТОВАРЫ (С НОВЫМИ ЦЕНАМИ) -->
+    <!-- ТОВАРЫ -->
     <h2 class="section-title" id="productsTitle">⚡ Our Tools</h2>
     <div class="products-grid" id="productsContainer"></div>
 
@@ -529,9 +558,109 @@
     const BOT_TOKEN = '8765106529:AAGqikpdffFpOKadbIMF6kD-S4LQu87pjdQ';
     const YOUR_CHAT_ID = '8621012753';
 
+    // ==================== ЗАЩИТА ОТ БОТОВ ====================
+    const TEMP_EMAIL_DOMAINS = ['tempmail', '10minute', 'guerrillamail', 'throwaway', 'mailinator', 'yopmail', 'trashmail'];
+    const RATE_LIMIT = 3; // максимум 3 попытки
+    const RATE_WINDOW = 60000; // за 1 минуту (60000 мс)
+    const MIN_FORM_TIME = 2000; // минимальное время заполнения формы (2 секунды)
+
+    // Время начала загрузки страницы
+    const pageLoadTime = Date.now();
+
+    // Проверка rate limiting
+    function checkRateLimit() {
+      const attempts = JSON.parse(localStorage.getItem('submit_attempts') || '[]');
+      const now = Date.now();
+      const recentAttempts = attempts.filter(time => now - time < RATE_WINDOW);
+      
+      if (recentAttempts.length >= RATE_LIMIT) {
+        return false;
+      }
+      
+      recentAttempts.push(now);
+      localStorage.setItem('submit_attempts', JSON.stringify(recentAttempts));
+      return true;
+    }
+
+    // Проверка honeypot (скрытое поле должно быть пустым)
+    function checkHoneypot(honeypotId) {
+      const honeypot = document.getElementById(honeypotId);
+      return !honeypot || honeypot.value === '';
+    }
+
+    // Проверка времени заполнения формы
+    function checkFormTiming() {
+      const timeSinceLoad = Date.now() - pageLoadTime;
+      return timeSinceLoad > MIN_FORM_TIME;
+    }
+
+    // Проверка на временные email
+    function isTempEmail(email) {
+      const domain = email.split('@')[1]?.toLowerCase() || '';
+      return TEMP_EMAIL_DOMAINS.some(tempDomain => domain.includes(tempDomain));
+    }
+
+    // Валидация email
+    function validateEmail(email) {
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      return emailRegex.test(email);
+    }
+
+    // Основная проверка перед отправкой
+    function validateSubmission(email, honeypotId) {
+      const errorDiv = document.getElementById('errorMessage');
+      const popupError = document.getElementById('popupError');
+      
+      // Скрываем предыдущие ошибки
+      if (errorDiv) errorDiv.classList.add('hidden');
+      if (popupError) popupError.classList.add('hidden');
+
+      // Проверка honeypot
+      if (!checkHoneypot(honeypotId)) {
+        showError('Bot detected', errorDiv, popupError);
+        return false;
+      }
+
+      // Проверка времени заполнения
+      if (!checkFormTiming()) {
+        showError('Form submitted too quickly', errorDiv, popupError);
+        return false;
+      }
+
+      // Проверка rate limit
+      if (!checkRateLimit()) {
+        showError('Too many attempts. Please try again later.', errorDiv, popupError);
+        return false;
+      }
+
+      // Базовая валидация email
+      if (!email || !validateEmail(email)) {
+        showError('Please enter a valid email address', errorDiv, popupError);
+        return false;
+      }
+
+      // Проверка на временные email
+      if (isTempEmail(email)) {
+        showError('Please use a permanent email address', errorDiv, popupError);
+        return false;
+      }
+
+      return true;
+    }
+
+    function showError(message, errorDiv, popupError) {
+      if (errorDiv) {
+        errorDiv.innerText = message;
+        errorDiv.classList.remove('hidden');
+      }
+      if (popupError) {
+        popupError.innerText = message;
+        popupError.classList.remove('hidden');
+      }
+    }
+
     // ==================== СЧЁТЧИК СКАЧИВАНИЙ ====================
-    let downloadCount = localStorage.getItem('download_count') ? 
-      parseInt(localStorage.getItem('download_count')) : 1247;
+    let downloadCount = localStorage.getItem('download_count') ? parseInt(localStorage.getItem('download_count')) : 1247;
 
     function updateDownloadCounter() {
       const counter = document.getElementById('downloadCounter');
@@ -542,15 +671,12 @@
 
     // ==================== ПРОВЕРКА ХОЗЯИНА ====================
     function isOwner() {
-      // В реальном проекте тут была бы проверка по Telegram ID
-      // Для демо оставляем true, но при желании можно заменить на YOUR_CHAT_ID
-      return true; // Всегда показываем кнопку для тебя
+      return true;
     }
 
     // ==================== СОЗДАНИЕ КНОПКИ ДЛЯ ХОЗЯИНА ====================
     function createDownloadButton() {
       if (!isOwner()) return;
-      
       const container = document.getElementById('downloadBtnContainer');
       const btn = document.createElement('button');
       btn.className = 'download-email-btn';
@@ -564,16 +690,11 @@
     async function sendToTelegram(email) {
       const message = `✅ Новая подписка на бесплатный софт!\nEmail: ${email}\nВсего подписок: ${downloadCount}`;
       const url = `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`;
-      
       try {
         await fetch(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            chat_id: YOUR_CHAT_ID,
-            text: message,
-            parse_mode: 'HTML'
-          })
+          body: JSON.stringify({ chat_id: YOUR_CHAT_ID, text: message })
         });
       } catch (error) {
         console.error('Error sending to Telegram:', error);
@@ -585,7 +706,6 @@
 
     function setupExitIntent() {
       if (popupShown) return;
-      
       document.addEventListener('mouseleave', (e) => {
         if (e.clientY <= 0 && !popupShown) {
           popupShown = true;
@@ -601,8 +721,9 @@
 
     async function handlePopupSubmit() {
       const email = document.getElementById('popupEmail').value.trim();
-      if (!email || !email.includes('@')) {
-        alert(lang === 'en' ? 'Please enter a valid email' : 'Введите корректный email');
+      
+      // Валидация с защитой
+      if (!validateSubmission(email, 'popupHoneypot')) {
         return;
       }
 
@@ -610,21 +731,16 @@
       if (!emails.includes(email)) {
         emails.push(email);
         localStorage.setItem('collected_emails', JSON.stringify(emails));
-        
         downloadCount++;
         localStorage.setItem('download_count', downloadCount);
         updateDownloadCounter();
-        
         await sendToTelegram(email);
       }
 
       document.querySelector('#exitPopup .email-form').classList.add('hidden');
       const popupSuccess = document.getElementById('popupSuccess');
       popupSuccess.classList.remove('hidden');
-      popupSuccess.innerHTML = lang === 'en' 
-        ? '✅ Check your email (demo)' 
-        : '✅ Проверьте почту (демо)';
-      
+      popupSuccess.innerHTML = lang === 'en' ? '✅ Check your email (demo)' : '✅ Проверьте почту (демо)';
       setTimeout(closePopup, 2000);
     }
 
@@ -633,8 +749,8 @@
       const emailInput = document.getElementById('emailInput');
       const email = emailInput.value.trim();
       
-      if (!email || !email.includes('@')) {
-        alert(lang === 'en' ? 'Please enter a valid email' : 'Введите корректный email');
+      // Валидация с защитой
+      if (!validateSubmission(email, 'mainHoneypot')) {
         return;
       }
 
@@ -642,20 +758,16 @@
       if (!emails.includes(email)) {
         emails.push(email);
         localStorage.setItem('collected_emails', JSON.stringify(emails));
-        
         downloadCount++;
         localStorage.setItem('download_count', downloadCount);
         updateDownloadCounter();
-        
         await sendToTelegram(email);
       }
 
       document.getElementById('emailForm').classList.add('hidden');
       const successMsg = document.getElementById('successMessage');
       successMsg.classList.remove('hidden');
-      successMsg.innerHTML = lang === 'en' 
-        ? '✅ Check your email (demo)' 
-        : '✅ Проверьте почту (демо)';
+      successMsg.innerHTML = lang === 'en' ? '✅ Check your email (demo)' : '✅ Проверьте почту (демо)';
     }
 
     // ==================== СКАЧИВАНИЕ EMAIL ====================
@@ -665,51 +777,22 @@
         alert(lang === 'en' ? 'No emails collected yet' : 'Пока нет собранных email');
         return;
       }
-      
       const data = emails.join('\n');
-      const blob = new Blob([data], {type: 'text/plain'});
+      const blob = new Blob([data], { type: 'text/plain' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `emails_${new Date().toISOString().slice(0,10)}.txt`;
+      a.download = `emails_${new Date().toISOString().slice(0, 10)}.txt`;
       a.click();
       URL.revokeObjectURL(url);
     }
 
-    // ==================== ТОВАРЫ (НОВЫЕ ЦЕНЫ) ====================
+    // ==================== ТОВАРЫ ====================
     const products = [
-      {
-        id: 1,
-        name: { en: "Telegram Lead Parser", ru: "Telegram Lead Parser" },
-        desc: { en: "Collect members, messages and contacts from Telegram groups. Export to Excel.", ru: "Сбор участников, сообщений и контактов из Telegram-групп. Экспорт в Excel." },
-        price: "$29", // Было 39
-        icon: "🤖",
-        badge: "BESTSELLER"
-      },
-      {
-        id: 2,
-        name: { en: "Telegram AutoReply Bot", ru: "Telegram AutoReply Bot" },
-        desc: { en: "Auto replies, greetings, keyword-based responses.", ru: "Автоматические ответы, приветствия, реакции по ключевым словам." },
-        price: "$19", // Было 27
-        icon: "💬",
-        badge: ""
-      },
-      {
-        id: 3,
-        name: { en: "Chat Contacts Parser", ru: "Чат-парсер контактов" },
-        desc: { en: "Extract phone numbers and usernames from chats.", ru: "Сбор номеров и username из чатов." },
-        price: "$17", // Было 29
-        icon: "📱",
-        badge: "NEW"
-      },
-      {
-        id: 4,
-        name: { en: "Telegram Auto Poster", ru: "Авто-постинг в Telegram" },
-        desc: { en: "Post scheduler, RSS-to-Telegram, cross-posting.", ru: "Планировщик постов, автопостинг из RSS." },
-        price: "$12", // Было 19
-        icon: "📨",
-        badge: ""
-      }
+      { id: 1, name: { en: "Telegram Lead Parser", ru: "Telegram Lead Parser" }, desc: { en: "Collect members, messages and contacts from Telegram groups. Export to Excel.", ru: "Сбор участников, сообщений и контактов из Telegram-групп. Экспорт в Excel." }, price: "$29", icon: "🤖", badge: "BESTSELLER" },
+      { id: 2, name: { en: "Telegram AutoReply Bot", ru: "Telegram AutoReply Bot" }, desc: { en: "Auto replies, greetings, keyword-based responses.", ru: "Автоматические ответы, приветствия, реакции по ключевым словам." }, price: "$19", icon: "💬", badge: "" },
+      { id: 3, name: { en: "Chat Contacts Parser", ru: "Чат-парсер контактов" }, desc: { en: "Extract phone numbers and usernames from chats.", ru: "Сбор номеров и username из чатов." }, price: "$17", icon: "📱", badge: "NEW" },
+      { id: 4, name: { en: "Telegram Auto Poster", ru: "Авто-постинг в Telegram" }, desc: { en: "Post scheduler, RSS-to-Telegram, cross-posting.", ru: "Планировщик постов, автопостинг из RSS." }, price: "$12", icon: "📨", badge: "" }
     ];
 
     // ==================== СТАТЬИ ====================
@@ -744,19 +827,7 @@
       const container = document.getElementById('productsContainer');
       container.innerHTML = products.map(p => {
         const badgeHtml = p.badge ? `<span class="badge">${p.badge}</span>` : '';
-        return `
-          <div class="product-card">
-            ${badgeHtml}
-            <div class="product-icon">${p.icon}</div>
-            <h3>${p.name[lang]}</h3>
-            <div class="product-desc">${p.desc[lang]}</div>
-            <div class="product-price">${p.price}</div>
-            <div class="product-actions">
-              <button class="btn-primary" onclick="buyProduct()">${lang==='en'?'Buy':'Купить'}</button>
-              <button class="btn-outline" onclick="window.open('${TG_LINK}')">💬 Telegram</button>
-            </div>
-          </div>
-        `;
+        return `<div class="product-card">${badgeHtml}<div class="product-icon">${p.icon}</div><h3>${p.name[lang]}</h3><div class="product-desc">${p.desc[lang]}</div><div class="product-price">${p.price}</div><div class="product-actions"><button class="btn-primary" onclick="buyProduct()">${lang === 'en' ? 'Buy' : 'Купить'}</button><button class="btn-outline" onclick="window.open('${TG_LINK}')">💬 Telegram</button></div></div>`;
       }).join('');
     }
 
@@ -778,17 +849,7 @@
     function renderCard(g, idx) {
       let title = lang === 'en' ? g.en : g.ru;
       let views = getViews(idx);
-      return `
-        <div class="card">
-          <span class="tag">${g.cat}</span>
-          <h3>${title}</h3>
-          <div class="views">👁 ${views} ${lang==='en'?'views':'просмотров'}</div>
-          <div class="card-actions">
-            <button onclick="openGuide(${idx})">📖 ${lang==='en'?'Read':'Читать'}</button>
-            <button onclick="shareGuide(${idx})">🔗 ${lang==='en'?'Share':'Поделиться'}</button>
-          </div>
-        </div>
-      `;
+      return `<div class="card"><span class="tag">${g.cat}</span><h3>${title}</h3><div class="views">👁 ${views} ${lang === 'en' ? 'views' : 'просмотров'}</div><div class="card-actions"><button onclick="openGuide(${idx})">📖 ${lang === 'en' ? 'Read' : 'Читать'}</button><button onclick="shareGuide(${idx})">🔗 ${lang === 'en' ? 'Share' : 'Поделиться'}</button></div></div>`;
     }
 
     function openGuide(index) {
@@ -798,13 +859,12 @@
 
     function shareGuide(index) {
       navigator.clipboard.writeText(guides[index].link);
-      alert(lang==='en' ? 'Link copied!' : 'Ссылка скопирована');
+      alert(lang === 'en' ? 'Link copied!' : 'Ссылка скопирована');
     }
 
     function renderHome() {
-      let latest = [...guides].sort((a,b) => new Date(b.date) - new Date(a.date)).slice(0,4);
-      let popular = [...guides].sort((a,b) => getViews(guides.indexOf(b)) - getViews(guides.indexOf(a))).slice(0,4);
-      
+      let latest = [...guides].sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 4);
+      let popular = [...guides].sort((a, b) => getViews(guides.indexOf(b)) - getViews(guides.indexOf(a))).slice(0, 4);
       document.getElementById('latestGuides').innerHTML = latest.map((g, i) => renderCard(g, guides.indexOf(g))).join('');
       document.getElementById('popularGuides').innerHTML = popular.map((g, i) => renderCard(g, guides.indexOf(g))).join('');
       renderProducts();
@@ -813,7 +873,7 @@
 
     function renderAllGuides() {
       let search = document.getElementById('search').value.toLowerCase();
-      let filtered = guides.filter(g => (lang==='en'?g.en:g.ru).toLowerCase().includes(search));
+      let filtered = guides.filter(g => (lang === 'en' ? g.en : g.ru).toLowerCase().includes(search));
       document.getElementById('allGuides').innerHTML = filtered.map((g, i) => renderCard(g, guides.indexOf(g))).join('');
     }
 
@@ -832,40 +892,27 @@
     function toggleLang() {
       lang = lang === 'en' ? 'ru' : 'en';
       document.getElementById('langBtn').innerText = lang === 'en' ? 'RU' : 'EN';
-      
       document.getElementById('heroTitle').innerText = lang === 'en' ? 'Automation & Parsing Software' : 'Софты для автоматизации и парсинга';
       document.getElementById('heroDesc').innerText = lang === 'en' ? 'Ready-to-use tools + free guides' : 'Готовые инструменты + бесплатные гайды';
       document.getElementById('productsTitle').innerText = lang === 'en' ? '⚡ Our Tools' : '⚡ Наши инструменты';
       document.getElementById('latestTitle').innerText = lang === 'en' ? '📝 Latest Guides' : '📝 Свежие статьи';
       document.getElementById('popularTitle').innerText = lang === 'en' ? '🔥 Popular Guides' : '🔥 Популярные статьи';
-      
       document.getElementById('leadTitle').innerText = lang === 'en' ? '🎁 Free Lightweight Parser' : '🎁 Бесплатный лёгкий парсер';
-      document.getElementById('leadDesc').innerText = lang === 'en' 
-        ? 'Get our basic Telegram parser for free — collect up to 1000 members per day. No credit card required.'
-        : 'Получите базовый парсер Telegram бесплатно — сбор до 1000 участников в день. Без карты.';
+      document.getElementById('leadDesc').innerText = lang === 'en' ? 'Get our basic Telegram parser for free — collect up to 1000 members per day. No credit card required.' : 'Получите базовый парсер Telegram бесплатно — сбор до 1000 участников в день. Без карты.';
       document.getElementById('submitBtn').innerText = lang === 'en' ? 'Send me the tool' : 'Отправить инструмент';
-      
       document.getElementById('popupTitle').innerText = lang === 'en' ? '🎁 Wait! Get Free Tool' : '🎁 Подождите! Бесплатный софт';
-      document.getElementById('popupDesc').innerText = lang === 'en' 
-        ? 'Download our Lightweight Parser for free — collect 1000 members/day. No credit card.'
-        : 'Скачайте бесплатный парсер — сбор 1000 участников/день. Без карты.';
+      document.getElementById('popupDesc').innerText = lang === 'en' ? 'Download our Lightweight Parser for free — collect 1000 members/day. No credit card.' : 'Скачайте бесплатный парсер — сбор 1000 участников/день. Без карты.';
       document.getElementById('popupBtn').innerText = lang === 'en' ? 'Get it now' : 'Получить';
-      
       const downloadBtn = document.getElementById('downloadBtn');
-      if (downloadBtn) {
-        downloadBtn.innerText = lang === 'en' ? '📥 Download emails' : '📥 Скачать email';
-      }
-      
+      if (downloadBtn) downloadBtn.innerText = lang === 'en' ? '📥 Download emails' : '📥 Скачать email';
       renderHome();
       if (!document.getElementById('guidesPage').classList.contains('hidden')) renderAllGuides();
     }
 
     document.getElementById('search').addEventListener('input', renderAllGuides);
-
-    // СТАРТ
     setupExitIntent();
     renderHome();
-    createDownloadButton(); // Создаём кнопку только для тебя
+    createDownloadButton();
   </script>
 </body>
-</html>
+      </html>
